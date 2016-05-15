@@ -26,5 +26,11 @@
   "bugs": {
     "url": "https://github.com/pimterry/rtm-to-todoist/issues"
   },
-  "homepage": "https://github.com/pimterry/rtm-to-todoist#readme"
+  "homepage": "https://github.com/pimterry/rtm-to-todoist#readme",
+  "dependencies": {
+    "node-todoist": "^0.3.2",
+    "open": "0.0.5",
+    "prompt": "^1.0.0",
+    "rtm-js": "^1.0.2"
+  }
 }
