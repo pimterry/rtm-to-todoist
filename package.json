@@ -1,0 +1,30 @@
+{
+  "name": "rtm-to-todoist",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"No tests provided\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pimterry/rtm-to-todoist.git"
+  },
+  "keywords": [
+    "remember-the-milk",
+    "rememberthemilk",
+    "rtm",
+    "todoist",
+    "convert",
+    "todo",
+    "sync",
+    "import",
+    "export"
+  ],
+  "author": "Tim Perry <pimterry@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/pimterry/rtm-to-todoist/issues"
+  },
+  "homepage": "https://github.com/pimterry/rtm-to-todoist#readme"
+}
