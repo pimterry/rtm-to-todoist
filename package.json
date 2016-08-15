@@ -28,9 +28,12 @@
   },
   "homepage": "https://github.com/pimterry/rtm-to-todoist#readme",
   "dependencies": {
-    "node-todoist": "^0.3.2",
+    "lodash": "^4.15.0",
+    "moment": "^2.14.1",
+    "node-uuid": "^1.4.7",
     "open": "0.0.5",
     "prompt": "^1.0.0",
+    "request-promise": "^4.1.1",
     "rtm-js": "^1.0.2"
   }
 }

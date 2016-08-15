@@ -1,13 +1,14 @@
 var RTM = require("rtm-js");
+var moment = require("moment");
 var open = require("open");
+var todoist = require("./todoist-sync");
+var _ = require("lodash");
 
 module.exports = function (rtmApiKey, rtmSecret, todoistEmail, todoistPassword) {
     getTasksFromRtm(rtmApiKey, rtmSecret)
-        .then((tasks) => {
-            var convertedTasks = tasks.map(convertTaskToTodoist);
-            addTasksToTodoist(todoistEmail, todoistPassword, convertedTasks)
-        })
-        .catch((e) => console.error("Failed to move tasks!", e));
+        .then(
+            (tasks) => addTasksToTodoist(todoistEmail, todoistPassword, tasks)
+        ).catch((e) => console.error("Failed to move tasks!", e));
 }
 
 function getTasksFromRtm(rtmApiKey, rtmSecret) {
@@ -15,7 +16,7 @@ function getTasksFromRtm(rtmApiKey, rtmSecret) {
 
     return authenticateRtm(rtm).then(() => {
         return new Promise((resolve, reject) => {
-            rtm.get('rtm.tasks.getList', {filter: 'status:incomplete'}, function(resp) {
+            rtm.get('rtm.tasks.getList', function(resp) {
                 if (!resp.rsp || !resp.rsp.tasks || !resp.rsp.tasks.list || !resp.rsp.tasks.list[0].taskseries) {
                     reject(`No tasks returned by RTM: ${JSON.stringify(resp)}`);
                 }
@@ -23,13 +24,20 @@ function getTasksFromRtm(rtmApiKey, rtmSecret) {
                 var rawTasks = resp.rsp.tasks.list[0].taskseries;
                 var tasks = rawTasks.map((task) => ({
                     name: task.name, // string task name
-                    priority: task.priority, // 1, 2, 3, N
-                    tags: task.tags.tag, // list of tag string
-                    notes: task.notes, // {'note': note object}. What happens for multiple notes???
-                    dueDate: task.task.due, // ISO-8601 string or undefined
-                    url: task.url, // string or undefined
-                    repeats: task.rrule // Undef or { every: 1, $t: "BYDAY=MO;FREQ=WEEKLY;INTERVAL=1" }
-                }));
+                    priority: task.task.priority, // 1, 2, 3, N
+                    tags: task.tags.tag ? (_.isArray(task.tags.tag) ? task.tags.tag : [task.tags.tag]) : [], // Array of strings
+                    notes: task.notes, // [] if empty. {'note': note object/list} otherwise. notes.note.each.$t or notes.note.$t.
+                    url: task.url || null, // string or null
+                    repeats: task.rrule || null, // Null or { every: 1, $t: "BYDAY=MO;FREQ=WEEKLY;INTERVAL=1" }
+
+                    added: moment(task.task.added), // Moment
+                    due: task.task.due ? moment(task.task.due) : null, // Moment or null
+                    completed: task.task.completed ? moment(task.task.completed) : null, // Moment or null
+                    deleted: task.task.deleted ? moment(task.task.deleted) : null // Moment or null
+                })).filter((task) => !!task.name &&
+                                     !task.repeats &&
+                                     !task.completed &&
+                                     !task.deleted /* TODO */); // For some reason, some tasks don't have names??? Drop those.
                 resolve(tasks);
             });
         });
@@ -49,7 +57,9 @@ function authenticateRtm(rtm) {
             console.log("If required, please confirm permissions, then press any key to continue\n");
             process.stdin.resume();
 
-            process.stdin.on('data', function() {
+            var waitForKeyPress = function() {
+                process.stdin.pause();
+                process.stdin.removeListener('data', waitForKeyPress);
                 console.log("Continuing...");
 
                 rtm.get('rtm.auth.getToken', {frob: frob}, function(resp){
@@ -61,26 +71,46 @@ function authenticateRtm(rtm) {
 
                     resolve();
                 });
-            });
+            };
+            process.stdin.on('data', waitForKeyPress);
         });
     });
 }
 
-function convertTaskToTodoist(rtmTask) {
-    return rtmTask;
-    return {
-        content: task.name,
-        priority: {
-            1: 4,
-            2: 3,
-            3: 2,
-            'N': 1
-        }[task.priority],
+function addTasksToTodoist(todoistEmail, todoistPassword, rtmTasks) {
+    todoist.login(todoistEmail, todoistPassword).then(() => {
+        console.log(JSON.stringify(rtmTasks.map((task) => ({name: task.name, tags: task.tags}))));
+        return todoist.addLabels(
+            _(rtmTasks).flatMap((task) => task.tags)
+                       .uniq()
+                       .map((tag) => ({name: tag}))
+                       .valueOf()
+        );
+    }).then((labelsMap) => {
+        // TODO: Repeats, url, notes
+        var todoistTasks = rtmTasks.map((task) => ({
+            content: task.name,
 
-    };
-}
+            priority: {
+                1: 4,
+                2: 3,
+                3: 2,
+                'N': 1
+            }[task.priority],
 
+            // TODO: think about timezones for this top argument
+            date_string:  task.due ? task.due.format("YYYY-MM-DD") : undefined,
+            due_date_utc: task.due ? task.due.utc().format("YYYY-MM-DDTHH:mm:59") : undefined,
 
-function addTasksToTodoist(todoistEmail, todoistPassword, tasks) {
-    throw new Error("Todoist import not yet implemented, failed to import tasks: " + JSON.stringify(tasks));
+            // TODO: Check if these actually work.
+            checked: !!task.completed,
+            is_deleted: !!task.deleted,
+
+            labels: task.tags.map((tag) => labelsMap[tag])
+        }));
+
+        return todoist.addItems(todoistTasks);
+    }).catch((error) => {
+        console.error("Error creating Todoist items", error);
+    });
 }
