@@ -3,6 +3,7 @@ var moment = require("moment");
 var open = require("open");
 var todoist = require("./todoist-sync");
 var _ = require("lodash");
+var RRule = require("rrule").RRule;
 
 module.exports = function (rtmApiKey, rtmSecret, todoistEmail, todoistPassword) {
     getTasksFromRtm(rtmApiKey, rtmSecret)
@@ -22,22 +23,34 @@ function getTasksFromRtm(rtmApiKey, rtmSecret) {
                 }
 
                 var rawTasks = resp.rsp.tasks.list[0].taskseries;
-                var tasks = rawTasks.map((task) => ({
-                    name: task.name, // string task name
-                    priority: task.task.priority, // 1, 2, 3, N
-                    tags: task.tags.tag ? (_.isArray(task.tags.tag) ? task.tags.tag : [task.tags.tag]) : [], // Array of strings
-                    notes: task.notes, // [] if empty. {'note': note object/list} otherwise. notes.note.each.$t or notes.note.$t.
-                    url: task.url || null, // string or null
-                    repeats: task.rrule || null, // Null or { every: 1, $t: "BYDAY=MO;FREQ=WEEKLY;INTERVAL=1" }
+                var incompleteTasks = rawTasks.filter((task) => {
+                    if (_.isArray(task.task)) {
+                        return task.task.filter((t) => t.completed === '').length > 0;
+                    } else {
+                        return task.task.completed = '';
+                    }
+                });
+                var tasks = incompleteTasks.map((task) => {
+                    // task.task is either an object or *a list of objects* (for tasks that have repeated)
+                    // We take the first incomplete task as our relevant example.
+                    var taskInstance = _.isArray(task.task) ? _.first(task.task.filter((t) => t.completed === '')) : task.task;
 
-                    added: moment(task.task.added), // Moment
-                    due: task.task.due ? moment(task.task.due) : null, // Moment or null
-                    completed: task.task.completed ? moment(task.task.completed) : null, // Moment or null
-                    deleted: task.task.deleted ? moment(task.task.deleted) : null // Moment or null
-                })).filter((task) => !!task.name &&
-                                     !task.repeats &&
-                                     !task.completed &&
-                                     !task.deleted /* TODO */); // For some reason, some tasks don't have names??? Drop those.
+                    return {
+                        name: task.name, // string task name
+                        priority: taskInstance.priority, // 1, 2, 3, N
+                        tags: task.tags.tag ? (_.isArray(task.tags.tag) ? task.tags.tag : [task.tags.tag]) : [], // Array of strings
+                        notes: task.notes, // [] if empty. {'note': note object/list} otherwise. notes.note.each.$t or notes.note.$t.
+                        url: task.url || null, // string or null
+                        repeats: task.rrule || null, // Null or { every: 1, $t: "BYDAY=MO;FREQ=WEEKLY;INTERVAL=1" }
+
+                        added: moment(task.created), // Moment
+                        due: taskInstance.due ? moment(taskInstance.due) : null, // Moment or null
+                        completed: taskInstance.completed ? moment(taskInstance.completed) : null, // Moment or null
+                        deleted: taskInstance.deleted ? moment(taskInstance.deleted) : null // Moment or null
+                    }
+                }).filter((task) => !!task.name &&
+                                    !task.completed &&
+                                    !task.deleted /* TODO */); // For some reason, some tasks don't have names??? Drop those.
                 resolve(tasks);
             });
         });
@@ -87,7 +100,7 @@ function addTasksToTodoist(todoistEmail, todoistPassword, rtmTasks) {
                        .valueOf()
         );
     }).then((labelsMap) => {
-        // TODO: Repeats, url, notes
+        // TODO: url, notes
         var todoistTasks = rtmTasks.map((task) => ({
             content: task.name,
 
@@ -99,7 +112,7 @@ function addTasksToTodoist(todoistEmail, todoistPassword, rtmTasks) {
             }[task.priority],
 
             // TODO: think about timezones for this top argument
-            date_string:  task.due ? task.due.format("YYYY-MM-DD") : undefined,
+            date_string: todoistDateStringForRTMTask(task),
             due_date_utc: task.due ? task.due.utc().format("YYYY-MM-DDTHH:mm:59") : undefined,
 
             // TODO: Check if these actually work.
@@ -114,3 +127,17 @@ function addTasksToTodoist(todoistEmail, todoistPassword, rtmTasks) {
         console.error("Error creating Todoist items", error);
     });
 }
+
+function todoistDateStringForRTMTask(task) {
+    if (!task.due) return undefined;
+    else if (!task.repeats) return task.due.format("YYYY-MM-DD");
+    else {
+        // RTM API is badly behaved, and doesn't include a timezone signifier in UNTIL clauses
+        // Here we manually add one, so our RRule parser is happy.
+        var repeatPattern = task.repeats.$t.replace(/(UNTIL=[\dT]+)($|;)/, "$1Z$2");
+
+        // We just return a human-reable version of this, seems to be fine for Todoist.
+        // Note that task.repeats has an 'every' property - seems to be always 1; we just ignore it.
+        return RRule.fromString(repeatPattern).toText();
+    }
+};
