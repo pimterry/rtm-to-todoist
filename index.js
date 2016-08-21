@@ -27,15 +27,17 @@ function getTasksFromRtm(rtmApiKey, rtmSecret) {
                     if (_.isArray(task.task)) {
                         return task.task.filter((t) => t.completed === '').length > 0;
                     } else {
-                        return task.task.completed = '';
+                        return task.task.completed === '';
                     }
                 });
-                var tasks = incompleteTasks.map((task) => {
+
+                resolve(incompleteTasks.map((task) => {
                     // task.task is either an object or *a list of objects* (for tasks that have repeated)
                     // We take the first incomplete task as our relevant example.
                     var taskInstance = _.isArray(task.task) ? _.first(task.task.filter((t) => t.completed === '')) : task.task;
 
                     return {
+                        id: task.id, // Number, wrapped in a string
                         name: task.name, // string task name
                         priority: taskInstance.priority, // 1, 2, 3, N
                         tags: task.tags.tag ? (_.isArray(task.tags.tag) ? task.tags.tag : [task.tags.tag]) : [], // Array of strings
@@ -48,15 +50,14 @@ function getTasksFromRtm(rtmApiKey, rtmSecret) {
                         completed: taskInstance.completed ? moment(taskInstance.completed) : null, // Moment or null
                         deleted: taskInstance.deleted ? moment(taskInstance.deleted) : null // Moment or null
                     }
-                }).filter((task) => !!task.name &&
-                                    !task.completed &&
-                                    !task.deleted /* TODO */); // For some reason, some tasks don't have names??? Drop those.
-                resolve(tasks);
+                }).filter((task) =>
+                    !!task.name &&  // For some reason, some tasks don't have names??? Drop those.
+                    !task.completed &&
+                    !task.deleted
+                ));
             });
         });
     });
-
-    // Want: Name, priority, dates, notes, URL, repeating status
 }
 
 function authenticateRtm(rtm) {
@@ -66,8 +67,8 @@ function authenticateRtm(rtm) {
 
             var authUrl = rtm.getAuthUrl(frob);
             open(authUrl);
-            console.log("An authentication page has been opened in your browser.\n");
-            console.log("If required, please confirm permissions, then press any key to continue\n");
+            console.log("An authentication page has been opened in your browser.");
+            console.log("If required, please confirm permissions, then press any key to continue");
             process.stdin.resume();
 
             var waitForKeyPress = function() {
@@ -92,7 +93,6 @@ function authenticateRtm(rtm) {
 
 function addTasksToTodoist(todoistEmail, todoistPassword, rtmTasks) {
     todoist.login(todoistEmail, todoistPassword).then(() => {
-        console.log(JSON.stringify(rtmTasks.map((task) => ({name: task.name, tags: task.tags}))));
         return todoist.addLabels(
             _(rtmTasks).flatMap((task) => task.tags)
                        .uniq()
@@ -100,8 +100,8 @@ function addTasksToTodoist(todoistEmail, todoistPassword, rtmTasks) {
                        .valueOf()
         );
     }).then((labelsMap) => {
-        // TODO: url, notes
         var todoistTasks = rtmTasks.map((task) => ({
+            id: "id:" + task.id,
             content: task.name,
 
             priority: {
@@ -115,14 +115,28 @@ function addTasksToTodoist(todoistEmail, todoistPassword, rtmTasks) {
             date_string: todoistDateStringForRTMTask(task),
             due_date_utc: task.due ? task.due.utc().format("YYYY-MM-DDTHH:mm:59") : undefined,
 
-            // TODO: Check if these actually work.
-            checked: !!task.completed,
-            is_deleted: !!task.deleted,
-
             labels: task.tags.map((tag) => labelsMap[tag])
         }));
 
         return todoist.addItems(todoistTasks);
+    }).then((todosMap) => {
+        var tasksWithNotes = rtmTasks.filter((task) => task.notes.note !== []);
+
+        var notesToAdd = _.map(tasksWithNotes, (task) => {
+            var notes = _(_.isArray(task.notes.note) ? task.notes.note : [task.notes.note]).filter(
+                (note) => !!note
+            ).flatMap((note) => [
+                note.title,
+                note.$t
+            ]).valueOf();
+
+            return {
+                item_id: todosMap["id:" + task.id],
+                content: notes.concat(task.url).filter((x) => !!x).join("\n")
+            };
+        }).filter((note) => !!note.content);
+
+        return todoist.addNotes(notesToAdd);
     }).catch((error) => {
         console.error("Error creating Todoist items", error);
     });

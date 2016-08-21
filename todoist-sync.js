@@ -27,35 +27,55 @@ exports.login = function (email, password) {
 // ** High-level APIs **
 
 exports.addItems = function (items) {
-    var itemCommands = items.map((item) => ({
-        type: "item_add",
-        temp_id: uuid.v1(),
-        uuid: uuid.v1(),
-        args: item
-    }));
-
-    console.log(itemCommands);
-
-    // TODO: There must be a nicer way to write this recursion out
-    if (itemCommands.length > 100) {
-        var remainingItemCommands = _.drop(items, 100);
-        itemCommands = _.take(itemCommands, 100);
-    }
-
-    var result = exports.writeResources(itemCommands).then((response) => {
-        console.log(JSON.stringify(response));
-
-        var errors = itemCommands.filter((item) => response.sync_status[item.uuid] !== "ok")
-                                 .map((item) => ({ item: item, error: response.sync_status[item.uuid] }));
-        if (errors.length > 0) throw new Error(`Failed to create items: ${JSON.stringify(errors)}`);
-
-        // TODO: Maybe return something here? With a good temp_id this would be easy.
-    });
-
-    if (remainingItemCommands) {
-        return result.then(() => exports.addItems(remainingItemCommands));
+    if (items.length > 50) {
+        return Promise.all(
+            _.chunk(items, 50).map((chunk, i) => {
+                return new Promise((resolve, reject) => {
+                    setTimeout(() => {
+                        try {
+                            resolve(exports.addItems(chunk))
+                        } catch (e) { reject(e) }
+                    }, 10000 * i);
+                });
+            })
+        ).then((resultArrays) => _.merge.apply(_, resultArrays));
     } else {
-        return result;
+        var itemCommands = items.map((item) => ({
+            type: "item_add",
+            temp_id: item.id || uuid.v1(), // TODO - How should we actually work out what IDs to use?
+            uuid: uuid.v1(),
+            args: item
+        }));
+
+        return exports.writeResources(itemCommands).then((response) => {
+            var errors = itemCommands.filter((item) => response.sync_status[item.uuid] !== "ok")
+                                     .map((item) => ({ item: item, error: response.sync_status[item.uuid] }));
+            if (errors.length > 0) throw new Error(`Failed to create items: ${JSON.stringify(errors)}`);
+
+            return response.temp_id_mapping;
+        });
+    }
+};
+
+exports.addNotes = function (notes) {
+    if (notes.length > 100) {
+        return Promise.all(
+            _.chunk(notes, 100).map((chunk) => exports.addNotes(chunk))
+        ).then((resultArrays) => _.merge.apply(_, resultArrays));
+    } else {
+        var noteCommands = notes.map((note) => ({
+            type: "note_add",
+            temp_id: uuid.v1(),
+            uuid: uuid.v1(),
+            args: note
+        }));
+
+        return exports.writeResources(noteCommands).then((response) => {
+            // TODO: Refactor UUID and error handling into writeResources
+            var errors = noteCommands.filter((note) => response.sync_status[note.uuid] !== "ok")
+                                     .map((note) => ({ note: note, error: response.sync_status[note.uuid] }));
+            if (errors.length > 0) throw new Error(`Failed to create notes: ${JSON.stringify(errors)}`);
+        });
     }
 };
 
@@ -67,14 +87,11 @@ exports.addLabels = function (labels) {
         args: label
     }));
 
-    console.log(labelCommands);
     return exports.writeResources(labelCommands).then((response) => {
-        console.log(JSON.stringify(response));
-
         // TODO: Refactor UUID and error handling into writeResources
         var errors = labelCommands.filter((label) => response.sync_status[label.uuid] !== "ok")
                                   .map((label) => ({ label: label, error: response.sync_status[label.uuid] }));
-        if (errors.length > 0) throw new Error(`Failed to create items: ${JSON.stringify(errors)}`);
+        if (errors.length > 0) throw new Error(`Failed to create labels: ${JSON.stringify(errors)}`);
 
         return response.temp_id_mapping;
     });
